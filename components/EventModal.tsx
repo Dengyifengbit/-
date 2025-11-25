@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Icons } from './Icons';
 import { cn } from '../utils';
@@ -36,11 +37,26 @@ export const EventModal: React.FC<EventModalProps> = ({
     } else {
       setTitle('');
       setDescription('');
-      setStartTime('09:00');
-      setEndTime('10:00');
+      
+      if (selectedDate) {
+        const h = selectedDate.getHours().toString().padStart(2, '0');
+        const m = selectedDate.getMinutes().toString().padStart(2, '0');
+        if (h !== '00' || m !== '00') {
+             setStartTime(`${h}:${m}`);
+             const endDate = new Date(selectedDate.getTime() + 60*60*1000);
+             setEndTime(endDate.toTimeString().slice(0,5));
+        } else {
+             setStartTime('09:00');
+             setEndTime('10:00');
+        }
+      } else {
+         setStartTime('09:00');
+         setEndTime('10:00');
+      }
+      
       setType('event');
     }
-  }, [initialData, isOpen]);
+  }, [initialData, isOpen, selectedDate]);
 
   if (!isOpen) return null;
 
@@ -73,7 +89,7 @@ export const EventModal: React.FC<EventModalProps> = ({
       <div className="glass-card bg-white/90 rounded-2xl shadow-2xl w-full max-w-md p-6 transform transition-all scale-100 border border-white/60">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-bold text-slate-800 tracking-tight">
-            {initialData ? 'Edit Event' : 'New Schedule'}
+            {initialData ? '编辑日程' : '新建日程'}
           </h2>
           <button onClick={onClose} className="p-1.5 hover:bg-slate-100 rounded-full text-slate-500 transition-colors">
             <Icons.X size={20} />
@@ -85,7 +101,7 @@ export const EventModal: React.FC<EventModalProps> = ({
             <input
               autoFocus
               type="text"
-              placeholder="What needs to be done?"
+              placeholder="需要做什么?"
               className="w-full text-xl font-medium border-b-2 border-slate-100 focus:border-indigo-400 outline-none py-2 bg-transparent placeholder:text-slate-300 transition-colors"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -94,7 +110,7 @@ export const EventModal: React.FC<EventModalProps> = ({
 
           <div className="flex gap-4">
             <div className="flex-1">
-              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">Start</label>
+              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">开始</label>
               <div className="flex items-center bg-slate-50/50 rounded-xl px-3 py-2.5 border border-slate-100 focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
                 <Icons.Clock size={16} className="text-slate-400 mr-2" />
                 <input
@@ -106,7 +122,7 @@ export const EventModal: React.FC<EventModalProps> = ({
               </div>
             </div>
             <div className="flex-1">
-              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">End</label>
+              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">结束</label>
               <div className="flex items-center bg-slate-50/50 rounded-xl px-3 py-2.5 border border-slate-100 focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
                 <Icons.Clock size={16} className="text-slate-400 mr-2" />
                 <input
@@ -120,30 +136,30 @@ export const EventModal: React.FC<EventModalProps> = ({
           </div>
 
           <div>
-             <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">Category</label>
+             <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">类型</label>
              <div className="flex bg-slate-100/50 p-1 rounded-xl">
                 <button 
                   onClick={() => setType('event')}
                   className={cn("flex-1 py-2 text-sm rounded-lg font-medium transition-all", type === 'event' ? "bg-white text-indigo-600 shadow-sm" : "text-slate-500 hover:text-slate-700")}
                 >
-                  Event
+                  日程
                 </button>
                 <button 
                    onClick={() => setType('task-block')}
                    className={cn("flex-1 py-2 text-sm rounded-lg font-medium transition-all", type === 'task-block' ? "bg-white text-amber-600 shadow-sm" : "text-slate-500 hover:text-slate-700")}
                 >
-                  Focus Block
+                  专注块
                 </button>
              </div>
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">Description</label>
+            <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">备注</label>
             <div className="relative">
               <Icons.AlignLeft className="absolute top-3 left-3 text-slate-400" size={16} />
               <textarea
                 rows={3}
-                placeholder="Add notes, location, or URL..."
+                placeholder="添加地点、链接或备注..."
                 className="w-full bg-slate-50/50 rounded-xl py-2 pl-9 pr-3 text-sm border border-slate-100 outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 transition-all"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
@@ -158,7 +174,7 @@ export const EventModal: React.FC<EventModalProps> = ({
               onClick={() => onDelete(initialData.id)}
               className="flex items-center text-rose-500 hover:bg-rose-50 px-4 py-2 rounded-xl text-sm transition-colors font-medium"
              >
-                <Icons.Trash2 size={16} className="mr-2" /> Delete
+                <Icons.Trash2 size={16} className="mr-2" /> 删除
              </button>
           ) : <div></div>}
          
@@ -167,7 +183,7 @@ export const EventModal: React.FC<EventModalProps> = ({
               onClick={handleSave}
               className="bg-slate-800 hover:bg-slate-700 text-white px-8 py-2.5 rounded-xl text-sm font-semibold transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5"
             >
-              Save
+              保存
             </button>
           </div>
         </div>

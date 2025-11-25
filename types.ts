@@ -1,4 +1,5 @@
-export type ViewMode = 'day' | 'week' | 'month';
+
+export type ViewMode = 'day' | 'week' | 'month' | 'gantt';
 
 export interface Task {
   id: string;
@@ -6,6 +7,11 @@ export interface Task {
   status: 'todo' | 'done';
   createdAt: number;
   tags: string[];
+  date?: string; // YYYY-MM-DD
+  startTime?: string; // HH:mm
+  endTime?: string; // HH:mm
+  description?: string;
+  location?: string;
 }
 
 export interface CalendarEvent {
@@ -14,6 +20,8 @@ export interface CalendarEvent {
   start: Date;
   end: Date;
   type: 'event' | 'task-block';
+  status?: 'todo' | 'done'; // Synced from Task
+  tags?: string[]; // Synced from Task for Fishbone grouping
   color?: string; // Hex code or tailwind class
   description?: string;
 }

@@ -1,3 +1,4 @@
+
 import React from "react";
 import {
   Calendar,
@@ -25,7 +26,10 @@ import {
   BookOpen,
   CloudRain,
   VolumeX,
-  Zap
+  Zap,
+  GanttChartSquare,
+  Fish,
+  StretchHorizontal
 } from "lucide-react";
 
 export const Icons = {
@@ -54,5 +58,8 @@ export const Icons = {
   BookOpen,
   CloudRain,
   VolumeX,
-  Zap
+  Zap,
+  ChartGantt: GanttChartSquare,
+  Fish,
+  Tracks: StretchHorizontal
 };

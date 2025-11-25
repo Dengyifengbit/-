@@ -1,4 +1,5 @@
-import React from 'react';
+
+import React, { useState } from 'react';
 import { format, addDays, startOfWeek, isSameDay, startOfMonth, endOfMonth, endOfWeek, eachDayOfInterval, isSameMonth } from 'date-fns';
 import { CalendarEvent, ViewMode, Task } from '../types';
 import { cn, getEventStyle } from '../utils';
@@ -20,24 +21,29 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   onSlotClick,
   onDropTask
 }) => {
+  const [draggedEventId, setDraggedEventId] = useState<string | null>(null);
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    e.currentTarget.classList.add('bg-indigo-50/30');
+    // Increase visual feedback for "Snapping" feel
+    e.currentTarget.classList.add('bg-indigo-100/60', 'shadow-inner');
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
-    e.currentTarget.classList.remove('bg-indigo-50/30');
+    e.currentTarget.classList.remove('bg-indigo-100/60', 'shadow-inner');
   };
 
   const handleDrop = (e: React.DragEvent, date: Date) => {
     e.preventDefault();
-    e.currentTarget.classList.remove('bg-indigo-50/30');
+    e.currentTarget.classList.remove('bg-indigo-100/60', 'shadow-inner');
     const taskData = e.dataTransfer.getData('application/json');
     if (taskData) {
       const task = JSON.parse(taskData);
       onDropTask(date, task);
     }
+    // Reset drag state
+    setDraggedEventId(null);
   };
 
   // --- Day View ---
@@ -154,7 +160,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   {hours.map(hour => (
                     <div 
                         key={hour} 
-                        className="h-[60px] border-b border-white/20"
+                        className="h-[60px] border-b border-white/20 transition-colors duration-200"
                         onDragOver={handleDragOver}
                         onDragLeave={handleDragLeave}
                         onDrop={(e) => {
@@ -173,21 +179,44 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   {/* Render Events */}
                   {dayEvents.map(event => {
                     const style = getEventStyle(event);
+                    const isDragging = draggedEventId === event.id;
+
                     return (
                       <div
                         key={event.id}
+                        draggable
+                        onDragStart={(e) => {
+                            setDraggedEventId(event.id);
+                            // We need to pass data for the drop handler to know what to update
+                            // Since we are reusing the 'task' drop logic for simplicity in this demo,
+                            // we construct a pseudo-task object. 
+                            // Ideally, App.tsx should handle "Event Move" separately.
+                            const pseudoTask = { 
+                                id: event.id, 
+                                title: event.title, 
+                                description: event.description,
+                                // Pass other fields if needed
+                            };
+                            e.dataTransfer.setData('application/json', JSON.stringify(pseudoTask));
+                            e.dataTransfer.effectAllowed = 'move';
+                        }}
+                        onDragEnd={() => setDraggedEventId(null)}
                         onClick={(e) => { e.stopPropagation(); onEventClick(event); }}
                         className={cn(
-                          "absolute inset-x-1 rounded-lg px-2 py-1.5 text-[10px] font-medium border-l-2 cursor-pointer hover:scale-[1.03] transition-all duration-200 shadow-sm overflow-hidden z-10 backdrop-blur-md group",
+                          "absolute inset-x-1 rounded-lg px-2 py-1.5 text-[10px] font-medium border-l-2 cursor-grab active:cursor-grabbing shadow-sm overflow-hidden z-10 backdrop-blur-md group",
+                          // Smooth Transition for "Snap" effect:
+                          // We disable transition WHILE dragging to avoid lag, but enable it otherwise for smooth update
+                          isDragging ? "opacity-60 scale-105 shadow-2xl z-50 transition-none" : "transition-all duration-500 cubic-bezier(0.34, 1.56, 0.64, 1)", // Bouncy snap effect
+                          "hover:scale-105 hover:shadow-lg hover:z-40",
                            event.type === 'event' 
                              ? "bg-[#D6E4FF]/90 border-blue-400 text-slate-800" 
-                             : "bg-[#FDE68A]/90 border-amber-400 text-slate-800" // Morandi colors would be better here
+                             : "bg-[#FDE68A]/90 border-amber-400 text-slate-800"
                         )}
                         style={style}
                       >
                          <div className="truncate font-bold text-xs">{event.title}</div>
-                         <div className="opacity-0 group-hover:opacity-70 transition-opacity truncate">
-                           {format(event.start, 'h:mm')}
+                         <div className="opacity-100 transition-opacity truncate mt-0.5 text-slate-600 font-mono text-[9px]">
+                           {format(event.start, 'HH:mm')} - {format(event.end, 'HH:mm')}
                          </div>
                       </div>
                     );
