@@ -4,6 +4,7 @@ import { addDays, addMonths, subDays, subMonths, format, startOfWeek, endOfWeek,
 import { Sidebar } from './components/Sidebar';
 import { CalendarView } from './components/CalendarView';
 import { EventModal } from './components/EventModal';
+import { TaskDetailPanel } from './components/TaskDetailPanel';
 import { HabitTracker } from './components/HabitTracker';
 import { ZenMode } from './components/ZenMode';
 import { GanttChart } from './components/GanttChart';
@@ -15,26 +16,58 @@ const App = () => {
   // --- Data State ---
   // We initialize with some dummy data that is "Synced" by ID
   const todayStr = format(new Date(), 'yyyy-MM-dd');
-  const id1 = '1';
-  const id2 = '2';
+  const today = new Date();
   
+  // Mock Project Data
+  const id_p1 = 'p1';
+  const id_p2 = 'p2';
+  const id_t1 = 't1';
+  const id_t2 = 't2';
+  const id_t3 = 't3';
+  const id_m1 = 'm1';
+
   const [tasks, setTasks] = useState<Task[]>([
-    { id: id1, title: '准备 Q4 季度汇报 PPT', status: 'todo', createdAt: Date.now(), tags: ['work'], date: todayStr, startTime: '09:00', endTime: '10:30', location: '第一会议室' },
-    { id: id2, title: '预约牙医', status: 'todo', createdAt: Date.now(), tags: ['life'], date: todayStr },
+    { id: id_t1, title: '竞品调研', status: 'done', createdAt: Date.now(), tags: ['work'], date: format(subDays(today, 2), 'yyyy-MM-dd'), startTime: '09:00', endTime: '17:00' },
+    { id: id_t2, title: '用户访谈', status: 'todo', createdAt: Date.now(), tags: ['work'], date: format(today, 'yyyy-MM-dd'), startTime: '10:00', endTime: '12:00' },
+    { id: id_t3, title: 'API 接口设计', status: 'todo', createdAt: Date.now(), tags: ['dev'], date: format(addDays(today, 1), 'yyyy-MM-dd'), startTime: '14:00', endTime: '18:00' },
+    { id: id_m1, title: '需求评审里程碑', status: 'todo', createdAt: Date.now(), tags: ['milestone'], date: format(addDays(today, 2), 'yyyy-MM-dd') },
   ]);
   
-  // Events now need a 'status' field to sync with Tasks for Gantt visualization
+  // Events with Project Management Fields
   const [events, setEvents] = useState<CalendarEvent[]>([
+    // Phase 1 (Parent)
+    { id: id_p1, title: '阶段一：需求分析', start: subDays(today, 2), end: today, type: 'event', status: 'todo', tags: ['phase'], color: '#94a3b8', progress: 50, projectName: 'Q4 产品发布' },
+    // Phase 2 (Parent)
+    { id: id_p2, title: '阶段二：开发', start: addDays(today, 1), end: addDays(today, 5), type: 'event', status: 'todo', tags: ['phase'], color: '#94a3b8', progress: 0, projectName: 'Q4 产品发布' },
+    
+    // Tasks
     { 
-      id: id1, // Linked to Task 1
-      title: '准备 Q4 季度汇报 PPT', 
-      start: new Date(new Date().setHours(9, 0, 0, 0)), 
-      end: new Date(new Date().setHours(10, 30, 0, 0)), 
-      type: 'event',
-      status: 'todo',
-      tags: ['work'],
-      color: '#A0C1B8',
-      description: 'Location: 第一会议室'
+      id: id_t1, parentId: id_p1, title: '竞品调研', start: subDays(today, 2), end: subDays(today, 1), type: 'event', status: 'done', tags: ['work'], color: '#A0C1B8',
+      progress: 100, owner: 'Alex', priority: 'P1', assignee: { name: 'Alex', avatar: '' }, projectName: 'Q4 产品发布', stageName: '需求分析'
+    },
+    { 
+      id: id_t2, parentId: id_p1, title: '用户访谈', start: today, end: addDays(today, 0, ), type: 'event', status: 'blocked', tags: ['work'], color: '#98B6C3',
+      progress: 30, owner: 'Sarah', dependencies: [id_t1], description: '客户要求修改配色，增加暗黑模式的调研。',
+      priority: 'P0', assignee: { name: 'Sarah', avatar: '' }, projectName: 'Q4 产品发布', stageName: '需求分析',
+      checklist: [
+          { id: 'c1', title: '准备访谈提纲', checked: true },
+          { id: 'c2', title: '邀约核心用户', checked: false },
+          { id: 'c3', title: '整理录音', checked: false }
+      ],
+      activityLog: [
+          { id: 'l1', type: 'system', content: 'Dependencies updated', timestamp: Date.now() - 100000 },
+          { id: 'l2', type: 'memo', content: '会议纪要：用户对目前的导航结构感到困惑，建议简化。', timestamp: Date.now(), user: 'Sarah' }
+      ]
+    },
+    { 
+      id: id_t3, parentId: id_p2, title: 'API 接口设计', start: addDays(today, 1), end: addDays(today, 3), type: 'event', status: 'todo', tags: ['dev'], color: '#B6A6CA',
+      progress: 0, owner: 'Mike', dependencies: [id_m1], priority: 'P2', projectName: 'Q4 产品发布', stageName: '开发'
+    },
+    
+    // Milestone
+    { 
+      id: id_m1, parentId: id_p1, title: '需求评审会', start: addDays(today, 1), end: addDays(today, 1), type: 'event', status: 'todo', tags: ['milestone'], color: '#E2C2C6',
+      isMilestone: true, owner: 'All', description: '全员必须参加，准备好PPT。', projectName: 'Q4 产品发布'
     }
   ]);
 
@@ -52,39 +85,21 @@ const App = () => {
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<Date | undefined>(undefined);
   
+  // Advanced Task Panel State
+  const [selectedTask, setSelectedTask] = useState<CalendarEvent | null>(null);
+
   // Zen Mode
   const [isZenMode, setIsZenMode] = useState(false);
   const [activeZenTask, setActiveZenTask] = useState<Task | undefined>(undefined);
-
-  // --- Helpers for Syncing ---
-  
-  // Helper to sync a Task change to an Event (e.g. title rename)
-  const syncTaskToEvent = (task: Task) => {
-    setEvents(prev => prev.map(e => {
-        if (e.id === task.id) {
-            return { 
-                ...e, 
-                title: task.title, 
-                description: task.description || e.description,
-                status: task.status, // Sync status
-                tags: task.tags
-            };
-        }
-        return e;
-    }));
-  };
 
   // --- Handlers ---
 
   const handleAddTask = (rawInput: string, currentContextDate: Date) => {
     const { title, time, date: parsedDate } = parseSmartInput(rawInput);
-    
-    // Determine date: Use parsed date if explicitly stated (e.g. "Tomorrow"), else context date
     let finalDate = currentContextDate;
     if (parsedDate && !isSameDay(parsedDate, new Date())) {
         finalDate = parsedDate;
     }
-
     const commonId = generateId();
 
     const newTask: Task = {
@@ -97,26 +112,25 @@ const App = () => {
       startTime: time 
     };
     
-    // 1. Add to Task List
     setTasks(prev => [newTask, ...prev]);
 
-    // 2. If time is present, ALSO Add to Calendar Events
     if (time) {
         const [h, m] = time.split(':').map(Number);
         const start = new Date(finalDate);
         start.setHours(h, m, 0, 0);
-        const end = new Date(start.getTime() + 60 * 60 * 1000); // Default 1 hour
+        const end = new Date(start.getTime() + 60 * 60 * 1000); 
         
         const newEvent: CalendarEvent = {
-            id: commonId, // SHARE ID
+            id: commonId, 
             title: title,
             start: start,
             end: end,
-            type: 'event', // Default to event so it shows in main calendar flow
+            type: 'event', 
             status: 'todo',
             tags: ['inbox'],
             description: 'Created via Quick Add',
-            color: '#98B6C3' 
+            color: '#98B6C3',
+            progress: 0
         };
         setEvents(prev => [...prev, newEvent]);
     }
@@ -126,8 +140,7 @@ const App = () => {
     setTasks(prev => prev.map(t => {
         if (t.id === id) {
             const newStatus = t.status === 'todo' ? 'done' : 'todo';
-            // Sync status to event immediately
-            setEvents(events => events.map(e => e.id === id ? { ...e, status: newStatus } : e));
+            setEvents(events => events.map(e => e.id === id ? { ...e, status: newStatus, progress: newStatus === 'done' ? 100 : e.progress } : e));
             return { ...t, status: newStatus };
         }
         return t;
@@ -150,17 +163,13 @@ const App = () => {
   };
 
   const handleDropTaskOnCalendar = (date: Date, task: Task) => {
-    // Check if event already exists for this task (by ID)
     const existingEvent = events.find(e => e.id === task.id);
-    
     const start = date;
     const end = new Date(date.getTime() + 60 * 60 * 1000);
 
     if (existingEvent) {
-        // Update existing event
         setEvents(prev => prev.map(e => e.id === task.id ? { ...e, start, end } : e));
     } else {
-        // Create new event
         const newEvent: CalendarEvent = {
             id: task.id,
             title: task.title,
@@ -169,24 +178,42 @@ const App = () => {
             type: 'event',
             status: task.status,
             tags: task.tags,
-            description: task.description
+            description: task.description,
+            progress: task.status === 'done' ? 100 : 0
         };
         setEvents(prev => [...prev, newEvent]);
     }
 
-    // Sync back to Task (Update Date and Time)
     const timeStr = format(start, 'HH:mm');
     const dateStr = format(start, 'yyyy-MM-dd');
     setTasks(prev => prev.map(t => t.id === task.id ? { ...t, date: dateStr, startTime: timeStr } : t));
   };
   
-  // Handler for Gantt Drag Drop
   const handleEventDrop = (event: CalendarEvent, newStart: Date) => {
       const duration = event.end.getTime() - event.start.getTime();
       const newEnd = new Date(newStart.getTime() + duration);
-      
       const updatedEvent = { ...event, start: newStart, end: newEnd };
       handleSaveEvent(updatedEvent);
+  };
+
+  // Sync structural or text changes from Gantt back to state
+  const handleEventUpdate = (id: string, updates: Partial<CalendarEvent>) => {
+      setEvents(prev => prev.map(e => e.id === id ? { ...e, ...updates } : e));
+      
+      // Also sync title changes to Tasks if they exist
+      if (updates.title) {
+          setTasks(prev => prev.map(t => t.id === id ? { ...t, title: updates.title! } : t));
+      }
+      // Sync Status
+      if (updates.status) {
+          const simpleStatus = updates.status === 'done' ? 'done' : 'todo';
+          setTasks(prev => prev.map(t => t.id === id ? { ...t, status: simpleStatus } : t));
+      }
+
+      // Update selected task if it's currently open
+      if (selectedTask && selectedTask.id === id) {
+          setSelectedTask(prev => prev ? ({ ...prev, ...updates } as CalendarEvent) : null);
+      }
   };
 
   const handleDateNavigate = (direction: 'prev' | 'next') => {
@@ -203,10 +230,7 @@ const App = () => {
     const isNew = !editingEvent;
     
     if (!isNew && editingEvent) {
-      // Update Existing Event
       setEvents(prev => prev.map(e => e.id === editingEvent.id ? { ...e, ...eventData } as CalendarEvent : e));
-      
-      // Sync update to Task
       setTasks(prev => prev.map(t => {
           if (t.id === editingEvent.id) {
               return {
@@ -221,7 +245,6 @@ const App = () => {
       }));
 
     } else {
-      // Create New Event
       const commonId = generateId();
       const newEvent: CalendarEvent = {
         id: commonId,
@@ -230,19 +253,19 @@ const App = () => {
         end: eventData.end || new Date(new Date().getTime() + 3600000),
         type: eventData.type || 'event',
         status: 'todo',
-        tags: ['work'], // Default tag
+        tags: ['work'], 
         description: eventData.description,
-        color: eventData.type === 'task-block' ? '#E8D5B5' : '#98B6C3'
+        color: eventData.type === 'task-block' ? '#E8D5B5' : '#98B6C3',
+        progress: 0
       };
       setEvents(prev => [...prev, newEvent]);
 
-      // ALSO Create corresponding Task
       const newTask: Task = {
           id: commonId,
           title: newEvent.title,
           status: 'todo',
           createdAt: Date.now(),
-          tags: ['work'], // Default tag
+          tags: ['work'], 
           date: format(newEvent.start, 'yyyy-MM-dd'),
           startTime: format(newEvent.start, 'HH:mm'),
           endTime: format(newEvent.end, 'HH:mm'),
@@ -255,10 +278,23 @@ const App = () => {
   const handleDelete = (id: string) => {
       setEvents(prev => prev.filter(e => e.id !== id));
       setTasks(prev => prev.filter(t => t.id !== id));
+      setSelectedTask(null);
+  };
+
+  // Helper to open the right modal/panel
+  const handleOpenDetail = (event: CalendarEvent) => {
+      if (event.tags?.includes('phase') || event.parentId) {
+          // Complex task -> Slide out panel
+          setSelectedTask(event);
+      } else {
+          // Simple event -> Modal
+          setEditingEvent(event);
+          setIsModalOpen(true);
+      }
   };
 
   return (
-    <div className="flex h-screen w-full font-sans overflow-hidden bg-slate-50">
+    <div className="flex h-screen w-full font-sans overflow-hidden bg-slate-50 relative">
       {/* Zen Mode Overlay */}
       {isZenMode && (
         <ZenMode 
@@ -271,16 +307,22 @@ const App = () => {
         />
       )}
       
-      {/* Gantt View Overlay (Full Screen replacement essentially) */}
+      {/* Task Detail Slide-out Panel */}
+      <TaskDetailPanel 
+         event={selectedTask} 
+         onClose={() => setSelectedTask(null)}
+         onUpdate={handleEventUpdate}
+         onDelete={handleDelete}
+      />
+
+      {/* Gantt View Overlay */}
       {viewMode === 'gantt' && (
         <GanttChart 
             events={events}
             currentDate={currentDate}
-            onEventClick={(event) => {
-                setEditingEvent(event);
-                setIsModalOpen(true);
-            }}
+            onEventClick={handleOpenDetail}
             onEventDrop={handleEventDrop}
+            onEventUpdate={handleEventUpdate}
             onClose={() => setViewMode('week')}
         />
       )}
@@ -373,16 +415,14 @@ const App = () => {
              viewMode={viewMode}
              currentDate={currentDate}
              events={events}
-             onEventClick={(event) => {
-               setEditingEvent(event);
-               setIsModalOpen(true);
-             }}
+             onEventClick={handleOpenDetail}
              onSlotClick={(date) => {
                setEditingEvent(null);
                setSelectedSlot(date);
                setIsModalOpen(true);
              }}
              onDropTask={handleDropTaskOnCalendar}
+             onSelectDate={setCurrentDate}
            />
            
            {/* Floating FAB */}

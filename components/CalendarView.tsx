@@ -1,8 +1,8 @@
-
 import React, { useState } from 'react';
 import { format, addDays, startOfWeek, isSameDay, startOfMonth, endOfMonth, endOfWeek, eachDayOfInterval, isSameMonth } from 'date-fns';
 import { CalendarEvent, ViewMode, Task } from '../types';
 import { cn, getEventStyle } from '../utils';
+import { Icons } from './Icons';
 
 interface CalendarViewProps {
   viewMode: ViewMode;
@@ -11,6 +11,7 @@ interface CalendarViewProps {
   onEventClick: (event: CalendarEvent) => void;
   onSlotClick: (date: Date) => void;
   onDropTask: (date: Date, task: Task) => void;
+  onSelectDate: (date: Date) => void;
 }
 
 export const CalendarView: React.FC<CalendarViewProps> = ({
@@ -19,228 +20,184 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   events,
   onEventClick,
   onSlotClick,
-  onDropTask
+  onDropTask,
+  onSelectDate
 }) => {
   const [draggedEventId, setDraggedEventId] = useState<string | null>(null);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    // Increase visual feedback for "Snapping" feel
-    e.currentTarget.classList.add('bg-indigo-100/60', 'shadow-inner');
+    e.currentTarget.classList.add('bg-indigo-50');
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
-    e.currentTarget.classList.remove('bg-indigo-100/60', 'shadow-inner');
+    e.currentTarget.classList.remove('bg-indigo-50');
   };
 
   const handleDrop = (e: React.DragEvent, date: Date) => {
     e.preventDefault();
-    e.currentTarget.classList.remove('bg-indigo-100/60', 'shadow-inner');
+    e.currentTarget.classList.remove('bg-indigo-50');
     const taskData = e.dataTransfer.getData('application/json');
     if (taskData) {
       const task = JSON.parse(taskData);
       onDropTask(date, task);
     }
-    // Reset drag state
-    setDraggedEventId(null);
   };
 
-  // --- Day View ---
-  if (viewMode === 'day') {
-    const hours = Array.from({ length: 24 }, (_, i) => i);
-    const dayEvents = events.filter(e => isSameDay(e.start, currentDate));
+  // --- Agenda / Detail View (Used for Day & Week modes) ---
+  if (viewMode === 'day' || viewMode === 'week') {
+    const startOfWeekDate = startOfWeek(currentDate, { weekStartsOn: 1 }); // Monday start
+    const weekDays = Array.from({ length: 7 }, (_, i) => addDays(startOfWeekDate, i));
+    
+    const dayEvents = events
+        .filter(e => isSameDay(e.start, currentDate))
+        .sort((a, b) => a.start.getTime() - b.start.getTime());
 
     return (
-      <div className="flex flex-col h-full overflow-y-auto no-scrollbar relative">
-        <div className="sticky top-0 z-10 bg-white/80 backdrop-blur-md border-b border-white/20 p-4 shadow-sm">
-            <h2 className="text-2xl font-light text-slate-800 tracking-tight">{format(currentDate, 'EEEE, MMMM do')}</h2>
-        </div>
-        <div className="flex-1 relative min-h-[1440px] bg-white/30 backdrop-blur-sm m-4 rounded-3xl border border-white/40 shadow-sm overflow-hidden"> 
-          {hours.map(hour => (
-            <div 
-                key={hour} 
-                className="absolute w-full border-b border-slate-100/60 flex items-start group"
-                style={{ top: `${(hour / 24) * 100}%`, height: `${100/24}%` }}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={(e) => {
-                    const slotDate = new Date(currentDate);
-                    slotDate.setHours(hour, 0, 0, 0);
-                    handleDrop(e, slotDate);
-                }}
-                onClick={() => {
-                    const slotDate = new Date(currentDate);
-                    slotDate.setHours(hour, 0, 0, 0);
-                    onSlotClick(slotDate);
-                }}
-            >
-              <div className="w-16 text-right pr-4 text-xs font-medium text-slate-400 -mt-2.5">
-                {format(new Date().setHours(hour), 'h a')}
-              </div>
-              <div className="flex-1 h-full group-hover:bg-white/40 transition-colors border-l border-slate-100/60"></div>
-            </div>
-          ))}
-
-          {dayEvents.map(event => {
-            const style = getEventStyle(event);
-            return (
-              <div
-                key={event.id}
-                onClick={(e) => { e.stopPropagation(); onEventClick(event); }}
-                className={cn(
-                  "absolute left-20 right-4 rounded-xl p-3 text-xs border-l-4 cursor-pointer hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 shadow-sm overflow-hidden backdrop-blur-md",
-                  event.type === 'event' ? "bg-blue-50/80 border-blue-400 text-slate-700" : "bg-amber-50/80 border-amber-400 text-slate-700",
-                  event.color && `border-l-[${event.color}]`
-                )}
-                style={style}
-              >
-                <div className="font-bold text-sm mb-0.5">{event.title}</div>
-                <div className="opacity-75 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-current opacity-50"></span>
-                    {format(event.start, 'h:mm')} - {format(event.end, 'h:mm a')}
-                </div>
-              </div>
-            );
-          })}
-          
-          {isSameDay(new Date(), currentDate) && (
-            <div 
-              className="absolute left-16 right-0 border-t border-red-400 z-20 pointer-events-none"
-              style={{ top: `${(new Date().getHours() * 60 + new Date().getMinutes()) / 1440 * 100}%` }}
-            >
-              <div className="absolute -left-1.5 -top-1 w-2 h-2 bg-red-400 rounded-full shadow-sm"></div>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // --- Week View ---
-  if (viewMode === 'week') {
-    const start = startOfWeek(currentDate);
-    const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
-    const hours = Array.from({ length: 24 }, (_, i) => i);
-
-    return (
-      <div className="flex flex-col h-full overflow-hidden">
-        {/* Header */}
-        <div className="grid grid-cols-8 border-b border-white/20 bg-white/40 backdrop-blur-md z-10">
-          <div className="p-4"></div>
-          {days.map(day => (
-            <div key={day.toISOString()} className={cn("p-4 text-center border-l border-white/20 transition-colors", isSameDay(day, new Date()) ? "bg-white/40" : "")}>
-              <div className={cn("text-xs font-bold uppercase mb-1 tracking-widest", isSameDay(day, new Date()) ? "text-indigo-600" : "text-slate-400")}>{format(day, 'EEE')}</div>
-              <div className={cn("text-xl font-light w-10 h-10 rounded-full flex items-center justify-center mx-auto transition-all", isSameDay(day, new Date()) ? "bg-indigo-600 text-white shadow-lg shadow-indigo-300 scale-110" : "text-slate-700")}>
-                {format(day, 'd')}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Grid */}
-        <div className="flex-1 overflow-y-auto no-scrollbar relative">
-          <div className="grid grid-cols-8 min-h-[1440px]">
-            {/* Time Axis */}
-            <div className="bg-white/30 backdrop-blur-sm sticky left-0 z-20">
-              {hours.map(hour => (
-                <div key={hour} className="h-[60px] relative">
-                   <span className="absolute -top-2.5 right-4 text-[10px] font-medium text-slate-400">
-                     {format(new Date().setHours(hour), 'h a')}
-                   </span>
-                </div>
-              ))}
-            </div>
-
-            {/* Days Columns */}
-            {days.map(day => {
-               const dayEvents = events.filter(e => isSameDay(e.start, day));
+      <div className="flex flex-col h-full bg-white/40 backdrop-blur-md rounded-3xl border border-white/40 shadow-sm overflow-hidden">
+        
+        {/* 1. Week Strip Header */}
+        <div className="flex items-center justify-between p-4 bg-white/40 border-b border-white/30 backdrop-blur-md z-10">
+           {weekDays.map(day => {
+               const isSelected = isSameDay(day, currentDate);
+               const isToday = isSameDay(day, new Date());
                return (
-                <div key={day.toISOString()} className="relative border-l border-white/30 h-full bg-white/20 hover:bg-white/30 transition-colors">
-                  {hours.map(hour => (
-                    <div 
-                        key={hour} 
-                        className="h-[60px] border-b border-white/20 transition-colors duration-200"
-                        onDragOver={handleDragOver}
-                        onDragLeave={handleDragLeave}
-                        onDrop={(e) => {
-                             const slotDate = new Date(day);
-                             slotDate.setHours(hour, 0, 0, 0);
-                             handleDrop(e, slotDate);
-                        }}
-                        onClick={() => {
-                             const slotDate = new Date(day);
-                             slotDate.setHours(hour, 0, 0, 0);
-                             onSlotClick(slotDate);
-                        }}
-                    ></div>
-                  ))}
-                  
-                  {/* Render Events */}
-                  {dayEvents.map(event => {
-                    const style = getEventStyle(event);
-                    const isDragging = draggedEventId === event.id;
+                   <button 
+                      key={day.toISOString()}
+                      onClick={() => onSelectDate(day)}
+                      onDragOver={handleDragOver}
+                      onDrop={(e) => {
+                          // Drop on date header sets time to 9am
+                          const target = new Date(day);
+                          target.setHours(9,0,0,0);
+                          handleDrop(e, target);
+                      }}
+                      className={cn(
+                          "flex flex-col items-center justify-center w-14 h-16 rounded-2xl transition-all duration-300 relative group",
+                          isSelected 
+                            ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200 scale-110" 
+                            : "hover:bg-white/60 text-slate-500 hover:scale-105",
+                          isToday && !isSelected && "text-indigo-600 font-bold"
+                      )}
+                   >
+                       <span className={cn("text-[10px] font-bold uppercase tracking-wider mb-1 opacity-80", isSelected ? "text-indigo-100" : "")}>
+                           {format(day, 'EEE')}
+                       </span>
+                       <span className="text-xl font-medium">{format(day, 'd')}</span>
+                       {isToday && !isSelected && <div className="w-1.5 h-1.5 bg-indigo-500 rounded-full absolute bottom-2"></div>}
+                   </button>
+               )
+           })}
+        </div>
 
-                    return (
-                      <div
-                        key={event.id}
-                        draggable
-                        onDragStart={(e) => {
-                            setDraggedEventId(event.id);
-                            // We need to pass data for the drop handler to know what to update
-                            // Since we are reusing the 'task' drop logic for simplicity in this demo,
-                            // we construct a pseudo-task object. 
-                            // Ideally, App.tsx should handle "Event Move" separately.
-                            const pseudoTask = { 
-                                id: event.id, 
-                                title: event.title, 
-                                description: event.description,
-                                // Pass other fields if needed
-                            };
-                            e.dataTransfer.setData('application/json', JSON.stringify(pseudoTask));
-                            e.dataTransfer.effectAllowed = 'move';
-                        }}
-                        onDragEnd={() => setDraggedEventId(null)}
-                        onClick={(e) => { e.stopPropagation(); onEventClick(event); }}
-                        className={cn(
-                          "absolute inset-x-1 rounded-lg px-2 py-1.5 text-[10px] font-medium border-l-2 cursor-grab active:cursor-grabbing shadow-sm overflow-hidden z-10 backdrop-blur-md group",
-                          // Smooth Transition for "Snap" effect:
-                          // We disable transition WHILE dragging to avoid lag, but enable it otherwise for smooth update
-                          isDragging ? "opacity-60 scale-105 shadow-2xl z-50 transition-none" : "transition-all duration-500 cubic-bezier(0.34, 1.56, 0.64, 1)", // Bouncy snap effect
-                          "hover:scale-105 hover:shadow-lg hover:z-40",
-                           event.type === 'event' 
-                             ? "bg-[#D6E4FF]/90 border-blue-400 text-slate-800" 
-                             : "bg-[#FDE68A]/90 border-amber-400 text-slate-800"
-                        )}
-                        style={style}
-                      >
-                         <div className="truncate font-bold text-xs">{event.title}</div>
-                         <div className="opacity-100 transition-opacity truncate mt-0.5 text-slate-600 font-mono text-[9px]">
-                           {format(event.start, 'HH:mm')} - {format(event.end, 'HH:mm')}
+        {/* 2. Agenda Content */}
+        <div 
+            className="flex-1 overflow-y-auto p-6 relative no-scrollbar"
+            onDragOver={handleDragOver}
+            onDrop={(e) => {
+                // Drop in empty space adds to current day end of list? Or 9am
+                const target = new Date(currentDate);
+                target.setHours(9,0,0,0);
+                handleDrop(e, target);
+            }}
+        >
+             {/* Date Title */}
+             <div className="mb-8">
+                 <h2 className="text-3xl font-light text-slate-800 flex items-baseline gap-3">
+                     {format(currentDate, 'EEEE')}
+                     <span className="text-lg text-slate-400 font-normal">{format(currentDate, 'MMMM do')}</span>
+                 </h2>
+                 <p className="text-slate-500 mt-1 flex items-center gap-2">
+                     <Icons.Clock size={14} /> 
+                     {dayEvents.length} events scheduled
+                 </p>
+             </div>
+
+             {/* Timeline Flow */}
+             <div className="relative pl-8 border-l border-indigo-100 space-y-8 min-h-[500px]">
+                 {dayEvents.length === 0 && (
+                     <div className="absolute top-10 left-8 right-0 text-center py-12 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                         <div className="w-16 h-16 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-3 text-indigo-300">
+                             <Icons.Calendar size={32} />
                          </div>
-                      </div>
-                    );
-                  })}
-                  
-                   {/* Current time line if today */}
-                   {isSameDay(day, new Date()) && (
-                      <div 
-                        className="absolute left-0 right-0 border-t-2 border-red-400 z-20 pointer-events-none opacity-60"
-                        style={{ top: `${(new Date().getHours() * 60 + new Date().getMinutes()) / 1440 * 100}%` }}
-                      >
-                         <div className="absolute -left-1 -top-1 w-2 h-2 bg-red-400 rounded-full"></div>
-                      </div>
-                    )}
-                </div>
-              );
-            })}
-          </div>
+                         <h3 className="text-slate-600 font-medium">No events for today</h3>
+                         <p className="text-xs text-slate-400 mt-1">Click the + button or drag tasks here</p>
+                     </div>
+                 )}
+
+                 {dayEvents.map((event, index) => (
+                     <div key={event.id} className="relative group animate-fade-in" style={{ animationDelay: `${index * 50}ms` }}>
+                         {/* Time Dot & Line */}
+                         <div className="absolute -left-[39px] top-4 w-5 h-5 rounded-full border-4 border-white shadow-sm z-10 flex items-center justify-center bg-indigo-500"></div>
+                         
+                         {/* Time Label */}
+                         <div className="absolute -left-28 top-4 w-16 text-right">
+                             <span className="text-sm font-bold text-slate-600 block">{format(event.start, 'HH:mm')}</span>
+                             <span className="text-xs text-slate-400 font-medium">{format(event.end, 'HH:mm')}</span>
+                         </div>
+
+                         {/* Card */}
+                         <div 
+                            onClick={(e) => { e.stopPropagation(); onEventClick(event); }}
+                            className={cn(
+                                "bg-white rounded-2xl p-5 shadow-sm border border-slate-100 hover:shadow-md hover:border-indigo-100 hover:translate-x-1 transition-all cursor-pointer relative overflow-hidden",
+                                event.status === 'done' ? "opacity-60 grayscale-[0.5]" : ""
+                            )}
+                         >
+                             <div className={cn("absolute left-0 top-0 bottom-0 w-1.5", event.type === 'task-block' ? "bg-amber-400" : "bg-indigo-500")}></div>
+                             
+                             <div className="flex justify-between items-start mb-2">
+                                 <div>
+                                    <h3 className={cn("text-lg font-bold text-slate-800", event.status === 'done' && "line-through text-slate-500")}>
+                                        {event.title}
+                                    </h3>
+                                    {event.owner && (
+                                        <div className="flex items-center gap-2 mt-1">
+                                            <div className="flex items-center gap-1 bg-slate-50 px-2 py-0.5 rounded-full border border-slate-100">
+                                                <Icons.User size={12} className="text-slate-400"/>
+                                                <span className="text-xs text-slate-600 font-medium">{event.owner}</span>
+                                            </div>
+                                        </div>
+                                    )}
+                                 </div>
+                                 <div className="flex gap-2">
+                                    {event.isMilestone && <Icons.Milestone className="text-amber-500" size={18} />}
+                                    {event.status === 'done' && <Icons.CheckCircle className="text-emerald-500" size={18} />}
+                                 </div>
+                             </div>
+
+                             {/* Metadata Grid */}
+                             <div className="grid grid-cols-2 gap-y-2 mt-3 text-sm">
+                                {event.description && (
+                                    <div className="col-span-2 flex gap-2 text-slate-500 bg-slate-50 p-2 rounded-lg items-start">
+                                        <Icons.AlignLeft size={14} className="mt-0.5 flex-shrink-0" />
+                                        <span className="line-clamp-2">{event.description}</span>
+                                    </div>
+                                )}
+                                <div className="flex items-center gap-2 text-slate-500">
+                                    <Icons.Clock size={14} />
+                                    <span>{((event.end.getTime() - event.start.getTime()) / 60000)} mins</span>
+                                </div>
+                                {event.tags && event.tags.length > 0 && (
+                                    <div className="flex items-center gap-2 text-slate-500">
+                                        <Icons.Layout size={14} />
+                                        <div className="flex gap-1">
+                                            {event.tags.map(t => <span key={t} className="text-xs bg-slate-100 px-1.5 rounded text-slate-600">#{t}</span>)}
+                                        </div>
+                                    </div>
+                                )}
+                             </div>
+                         </div>
+                     </div>
+                 ))}
+             </div>
         </div>
       </div>
     );
   }
 
-  // --- Month View ---
+  // --- Month View (Unchanged but cleaned up) ---
   const monthStart = startOfMonth(currentDate);
   const monthEnd = endOfMonth(monthStart);
   const startDate = startOfWeek(monthStart);
@@ -254,7 +211,6 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   return (
     <div className="flex flex-col h-full p-4 overflow-hidden">
       <div className="glass-panel rounded-3xl flex-1 flex flex-col overflow-hidden shadow-sm">
-        {/* Month Header */}
         <div className="grid grid-cols-7 border-b border-white/30 bg-white/20">
             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
             <div key={day} className="p-3 text-center text-xs font-bold uppercase text-slate-400 tracking-widest">
@@ -263,7 +219,6 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             ))}
         </div>
 
-        {/* Month Grid */}
         <div className="flex-1 grid grid-rows-5 lg:grid-rows-6">
             {weeks.map((week, wIndex) => (
                 <div key={wIndex} className="grid grid-cols-7 border-b border-white/20 last:border-0 h-full">
@@ -273,21 +228,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                             <div 
                                 key={dIndex} 
                                 className={cn(
-                                    "border-r border-white/20 p-2 transition-all relative group",
+                                    "border-r border-white/20 p-2 transition-all relative group cursor-pointer",
                                     !isSameMonth(day, monthStart) ? "bg-slate-50/20 text-slate-300" : "bg-white/10 hover:bg-white/40",
                                 )}
-                                onDragOver={handleDragOver}
-                                onDragLeave={handleDragLeave}
-                                onDrop={(e) => {
-                                    const slotDate = new Date(day);
-                                    slotDate.setHours(9, 0, 0, 0); // Default to 9am
-                                    handleDrop(e, slotDate);
-                                }}
-                                onClick={() => {
-                                    const slotDate = new Date(day);
-                                    slotDate.setHours(9, 0, 0, 0);
-                                    onSlotClick(slotDate);
-                                }}
+                                onClick={() => onSelectDate(day)}
                             >
                                 <div className="flex justify-center mb-1">
                                     <span className={cn(
@@ -298,25 +242,16 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                                     </span>
                                 </div>
                                 
-                                <div className="space-y-1.5 overflow-y-auto max-h-[80px] no-scrollbar mt-1">
+                                <div className="space-y-1 overflow-y-auto max-h-[80px] no-scrollbar mt-1">
                                     {dayEvents.slice(0, 3).map(event => (
                                         <div 
                                             key={event.id}
-                                            onClick={(e) => { e.stopPropagation(); onEventClick(event); }}
                                             className={cn(
-                                                "text-[10px] px-2 py-1 rounded-md truncate cursor-pointer shadow-sm transition-transform hover:scale-105",
-                                                event.type === 'event' ? "bg-white/80 text-indigo-900" : "bg-amber-100/80 text-amber-900"
+                                                "w-1.5 h-1.5 rounded-full mx-auto mb-1",
+                                                event.type === 'event' ? "bg-indigo-400" : "bg-amber-400"
                                             )}
-                                        >
-                                           <span className="opacity-50 mr-1">•</span>
-                                            {event.title}
-                                        </div>
+                                        ></div>
                                     ))}
-                                    {dayEvents.length > 3 && (
-                                        <div className="text-[9px] text-slate-500 text-center font-medium bg-white/30 rounded-full mx-2">
-                                            {dayEvents.length - 3} more
-                                        </div>
-                                    )}
                                 </div>
                             </div>
                         );

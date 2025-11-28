@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { format, addDays, startOfWeek, differenceInMinutes, addMinutes, isSameDay, startOfMonth, endOfMonth, eachDayOfInterval } from 'date-fns';
+import { format, addDays, startOfWeek, differenceInMinutes, addMinutes, isSameDay, startOfMonth, endOfMonth, eachDayOfInterval, differenceInDays } from 'date-fns';
 import { CalendarEvent } from '../types';
 import { cn } from '../utils';
 import { Icons } from './Icons';
@@ -10,387 +10,682 @@ interface GanttChartProps {
   currentDate: Date;
   onEventClick: (event: CalendarEvent) => void;
   onEventDrop: (event: CalendarEvent, newStart: Date) => void;
+  onEventUpdate: (id: string, updates: Partial<CalendarEvent>) => void;
   onClose: () => void;
 }
 
 type ZoomLevel = 'day' | 'week' | 'month';
-type GanttViewType = 'tracks' | 'fishbone';
 
 export const GanttChart: React.FC<GanttChartProps> = ({
   events,
   currentDate,
   onEventClick,
   onEventDrop,
+  onEventUpdate,
   onClose
 }) => {
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>('week');
-  const [viewType, setViewType] = useState<GanttViewType>('tracks');
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [showResources, setShowResources] = useState(false);
+  const [collapsedParents, setCollapsedParents] = useState<Set<string>>(new Set());
+  const [isMobile, setIsMobile] = useState(false);
   
+  // Interaction State for Left Panel
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [tempTitle, setTempTitle] = useState('');
+  const [hoverRowId, setHoverRowId] = useState<string | null>(null); // For Drag Highlighting
+
+  // Interaction State for Dependency Linking
+  const [linkSourceId, setLinkSourceId] = useState<string | null>(null);
+  const [mousePos, setMousePos] = useState<{x: number, y: number} | null>(null);
+
+  const timelineRef = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+      const checkMobile = () => setIsMobile(window.innerWidth < 768);
+      checkMobile();
+      window.addEventListener('resize', checkMobile);
+      return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
   // --- Configuration ---
   const getConfig = () => {
     switch (zoomLevel) {
       case 'day':
-        return {
-          pxPerMin: 2,
-          tickLabelFormat: 'HH:mm',
-          majorTickMinutes: 60,
-          viewDurationDays: 1,
-          headerFormat: 'MM月dd日'
-        };
+        return { pxPerDay: 200, tickFormat: 'd日 HH:mm', daysView: 7 };
       case 'week':
-        return {
-          pxPerMin: 0.25, 
-          tickLabelFormat: 'MM/dd',
-          majorTickMinutes: 360, // 6 hours
-          viewDurationDays: 7, 
-          headerFormat: 'EEE'
-        };
+        return { pxPerDay: 80, tickFormat: 'd日', daysView: 30 };
       case 'month':
       default:
-        return {
-          pxPerMin: 0.05, 
-          tickLabelFormat: 'd',
-          majorTickMinutes: 1440,
-          viewDurationDays: 30,
-          headerFormat: 'MM月'
-        };
+        return { pxPerDay: 40, tickFormat: 'MM/dd', daysView: 90 };
     }
   };
-
   const config = getConfig();
 
   const timelineStart = startOfWeek(currentDate, { weekStartsOn: 1 });
-  const timelineEnd = addDays(timelineStart, config.viewDurationDays);
-  const totalMinutes = differenceInMinutes(timelineEnd, timelineStart);
-  const totalWidth = totalMinutes * config.pxPerMin;
+  const timelineDays = Array.from({ length: config.daysView }).map((_, i) => addDays(timelineStart, i));
+  const totalWidth = config.daysView * config.pxPerDay;
 
-  // --- Bin Packing Algorithm for Time Tracks ---
-  // Calculates layout rows so events stack nicely like video tracks
-  const packedEvents = useMemo(() => {
-      // 1. Sort events by start time
-      const sorted = [...events].sort((a, b) => a.start.getTime() - b.start.getTime());
-      
-      const tracks: CalendarEvent[][] = [];
-      const placedEvents: { event: CalendarEvent; trackIndex: number }[] = [];
-
-      sorted.forEach(ev => {
-          let placed = false;
-          // Try to fit in existing tracks
-          for (let i = 0; i < tracks.length; i++) {
-              const lastInTrack = tracks[i][tracks[i].length - 1];
-              // Simple check: if start time > last event end time in this track
-              // Add a small buffer for visual spacing
-              if (ev.start.getTime() >= lastInTrack.end.getTime()) {
-                  tracks[i].push(ev);
-                  placedEvents.push({ event: ev, trackIndex: i });
-                  placed = true;
-                  break;
-              }
-          }
-          // Create new track
-          if (!placed) {
-              tracks.push([ev]);
-              placedEvents.push({ event: ev, trackIndex: tracks.length - 1 });
+  // --- Data Processing (Tree Flattening) ---
+  const { visibleEvents, flattenedEvents } = useMemo(() => {
+      // 1. Build Tree
+      const rootEvents = events.filter(e => !e.parentId);
+      const childMap: Record<string, CalendarEvent[]> = {};
+      events.forEach(e => {
+          if (e.parentId) {
+              if (!childMap[e.parentId]) childMap[e.parentId] = [];
+              childMap[e.parentId].push(e);
           }
       });
-      return placedEvents;
-  }, [events]);
 
+      // 2. Flatten based on collapsed state
+      const flat: { event: CalendarEvent; depth: number }[] = [];
+      
+      const traverse = (ev: CalendarEvent, depth: number) => {
+          flat.push({ event: ev, depth });
+          if (!collapsedParents.has(ev.id) && childMap[ev.id]) {
+              childMap[ev.id].forEach(child => traverse(child, depth + 1));
+          }
+      };
+      
+      rootEvents.forEach(root => traverse(root, 0));
+      return { visibleEvents: flat, flattenedEvents: flat.map(f => f.event) };
+  }, [events, collapsedParents]);
 
-  // --- Hooks ---
-  useEffect(() => {
-    if (scrollContainerRef.current && viewType === 'tracks') {
-      const now = new Date();
-      const diff = differenceInMinutes(now, timelineStart);
-      if (diff > 0) {
-        scrollContainerRef.current.scrollLeft = (diff * config.pxPerMin) - 100;
-      }
-    }
-  }, [zoomLevel, timelineStart, viewType]);
-
-  // --- Drag & Drop ---
+  // --- Timeline Drag & Drop (Rescheduling) ---
   const handleDragStart = (e: React.DragEvent, event: CalendarEvent) => {
     e.dataTransfer.setData('gantt-event-id', event.id);
     e.dataTransfer.effectAllowed = 'move';
-    const img = new Image();
-    img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-    e.dataTransfer.setDragImage(img, 0, 0);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const eventId = e.dataTransfer.getData('gantt-event-id');
-    const event = events.find(ev => ev.id === eventId);
-    
-    if (event && scrollContainerRef.current) {
-        const rect = scrollContainerRef.current.getBoundingClientRect();
-        const offsetX = e.clientX - rect.left + scrollContainerRef.current.scrollLeft;
-        const newMinutes = offsetX / config.pxPerMin;
-        const snappedMinutes = Math.round(newMinutes / 15) * 15;
-        const newStart = addMinutes(timelineStart, snappedMinutes);
-        onEventDrop(event, newStart);
+    if (eventId) {
+        const event = events.find(ev => ev.id === eventId);
+        
+        if (event && timelineRef.current) {
+            const rect = timelineRef.current.getBoundingClientRect();
+            const offsetX = e.clientX - rect.left + timelineRef.current.scrollLeft;
+            
+            // Calculate days offset
+            const daysOffset = Math.floor(offsetX / config.pxPerDay);
+            const newStart = addDays(timelineStart, daysOffset);
+            // Maintain time of day
+            newStart.setHours(event.start.getHours(), event.start.getMinutes());
+            
+            onEventDrop(event, newStart);
+        }
     }
   };
 
+  // --- Left Panel Structure Drag & Drop ---
+  const handleStructureDragStart = (e: React.DragEvent, event: CalendarEvent) => {
+      e.dataTransfer.setData('structure-id', event.id);
+      e.dataTransfer.effectAllowed = 'move';
+  };
 
-  // --- Render Components ---
+  const handleStructureDrop = (e: React.DragEvent, targetEvent: CalendarEvent) => {
+      e.preventDefault();
+      setHoverRowId(null);
+      const draggedId = e.dataTransfer.getData('structure-id');
+      
+      if (!draggedId || draggedId === targetEvent.id) return;
+      
+      // Prevent circular dependency (cannot drop parent into child)
+      let curr = targetEvent.parentId;
+      let isInvalid = false;
+      while (curr) {
+          if (curr === draggedId) { isInvalid = true; break; }
+          const parent = events.find(ev => ev.id === curr);
+          curr = parent ? parent.parentId : undefined;
+      }
+      if (isInvalid) {
+          alert("Cannot move a parent into its own child.");
+          return;
+      }
 
-  const renderTimeTracks = () => {
-     // Generate Ticks
-     const ticks = [];
-     for (let m = 0; m <= totalMinutes; m += config.majorTickMinutes) {
-       ticks.push({
-         offset: m * config.pxPerMin,
-         label: format(addMinutes(timelineStart, m), config.tickLabelFormat),
-         date: addMinutes(timelineStart, m)
-       });
-     }
+      // Execute Move (Grouping)
+      onEventUpdate(draggedId, { parentId: targetEvent.id });
+  };
 
-     return (
-        <div 
-            className="flex-1 overflow-x-auto overflow-y-auto bg-[#1e1e24] relative cursor-crosshair select-none custom-scrollbar"
-            ref={scrollContainerRef}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={handleDrop}
-            style={{ WebkitOverflowScrolling: 'touch' }} // Smooth scroll on iOS
-        >
-            <div style={{ width: Math.max(totalWidth, 800), height: '100%', minHeight: '600px' }} className="relative pb-20">
-                
-                {/* Dark Ruler */}
-                <div className="sticky top-0 h-10 bg-[#2b2b36] border-b border-white/10 z-20 flex items-end text-xs text-slate-400 font-mono select-none shadow-md">
-                    {ticks.map((tick, i) => (
-                        <div key={i} className="absolute bottom-0 border-l border-white/20 pl-1 pb-1 text-[10px] md:text-xs" style={{ left: tick.offset }}>
-                            {tick.label}
+  const handleStructureDragOver = (e: React.DragEvent, targetId: string) => {
+      e.preventDefault();
+      setHoverRowId(targetId);
+  };
+
+  const toggleCollapse = (id: string) => {
+      const newSet = new Set(collapsedParents);
+      if (newSet.has(id)) newSet.delete(id);
+      else newSet.add(id);
+      setCollapsedParents(newSet);
+  };
+  
+  // --- Inline Editing ---
+  const startEditing = (event: CalendarEvent) => {
+      setEditingId(event.id);
+      setTempTitle(event.title);
+  };
+
+  const saveEditing = () => {
+      if (editingId && tempTitle.trim()) {
+          onEventUpdate(editingId, { title: tempTitle });
+      }
+      setEditingId(null);
+  };
+
+  // --- Dependency Linking Logic ---
+  const checkCircularDependency = (sourceId: string, targetId: string) => {
+      // Check if targetId is an ancestor of sourceId via dependencies
+      const visited = new Set<string>();
+      const queue = [sourceId];
+      
+      while(queue.length > 0) {
+          const currId = queue.shift()!;
+          if(currId === targetId) return true; // Circular detected
+          
+          if(visited.has(currId)) continue;
+          visited.add(currId);
+
+          const currEvent = events.find(e => e.id === currId);
+          if(currEvent && currEvent.dependencies) {
+              queue.push(...currEvent.dependencies);
+          }
+      }
+      return false;
+  };
+
+  const handleLinkStart = (e: React.MouseEvent, sourceId: string) => {
+      e.stopPropagation();
+      setLinkSourceId(sourceId);
+      
+      if(timelineRef.current) {
+          const rect = timelineRef.current.getBoundingClientRect();
+          setMousePos({
+              x: e.clientX - rect.left + timelineRef.current.scrollLeft,
+              y: e.clientY - rect.top + timelineRef.current.scrollTop
+          });
+      }
+  };
+
+  const handleLinkMove = (e: React.MouseEvent) => {
+      if(linkSourceId && timelineRef.current) {
+          const rect = timelineRef.current.getBoundingClientRect();
+          setMousePos({
+              x: e.clientX - rect.left + timelineRef.current.scrollLeft,
+              y: e.clientY - rect.top + timelineRef.current.scrollTop
+          });
+      }
+  };
+
+  const handleLinkEnd = (e: React.MouseEvent, targetId: string) => {
+      e.stopPropagation();
+      if(linkSourceId && linkSourceId !== targetId) {
+          // 1. Validation
+          if (checkCircularDependency(linkSourceId, targetId)) {
+              alert("Circular dependency detected!");
+          } else {
+              // 2. Update Data
+              const targetEvent = events.find(e => e.id === targetId);
+              if (targetEvent) {
+                  const currentDeps = targetEvent.dependencies || [];
+                  if (!currentDeps.includes(linkSourceId)) {
+                      onEventUpdate(targetId, { dependencies: [...currentDeps, linkSourceId] });
+                  }
+              }
+          }
+      }
+      setLinkSourceId(null);
+      setMousePos(null);
+  };
+
+  const cancelLink = () => {
+      setLinkSourceId(null);
+      setMousePos(null);
+  };
+
+  // --- Helper to Render Bars ---
+  const renderBar = (item: { event: CalendarEvent, depth: number }, index: number) => {
+      const { event } = item;
+      const startDiff = differenceInDays(event.start, timelineStart);
+      const durationDays = Math.max(differenceInDays(event.end, event.start), 0.5); // Min width
+      
+      const left = startDiff * config.pxPerDay;
+      const width = durationDays * config.pxPerDay;
+      const pixelWidth = event.isMilestone ? 24 : width;
+      
+      // Text visibility logic
+      const isTextOutside = pixelWidth < 100 || event.isMilestone;
+
+      // Status Color Logic
+      let bgClass = "bg-slate-300";
+      let borderClass = "border-slate-400";
+      const now = new Date();
+      const isOverdue = now > event.end && event.status !== 'done';
+
+      if (event.isMilestone) {
+          bgClass = "bg-amber-400";
+          borderClass = "border-amber-500";
+      } else if (event.status === 'done') {
+          bgClass = "bg-emerald-400";
+          borderClass = "border-emerald-500";
+      } else if (isOverdue) {
+          bgClass = "bg-rose-400";
+          borderClass = "border-rose-500";
+      } else {
+          bgClass = "bg-blue-500";
+          borderClass = "border-blue-600";
+      }
+
+      if (event.tags?.includes('phase')) {
+          bgClass = "bg-slate-700";
+          borderClass = "border-slate-800";
+      }
+
+      return (
+          <div 
+             key={event.id}
+             className="absolute h-8 hover:z-40 group/bar flex items-center"
+             style={{ 
+                 left, 
+                 width: isTextOutside ? 'auto' : pixelWidth, 
+                 top: index * 40 + 8, // 40px row height
+             }}
+          >
+             {/* Rich Tooltip */}
+             {!linkSourceId && (
+                 <div className="absolute left-0 bottom-full mb-2 w-64 opacity-0 group-hover/bar:opacity-100 transition-opacity pointer-events-none z-[60]">
+                    <div className="bg-slate-800 text-white p-3 rounded-lg shadow-xl text-xs">
+                        <div className="font-bold text-sm mb-1">{event.title}</div>
+                        <div className="flex justify-between text-slate-400 mb-2">
+                            <span>{format(event.start, 'MM/dd HH:mm')} - {format(event.end, 'MM/dd HH:mm')}</span>
+                            <span>{event.progress || 0}%</span>
                         </div>
-                    ))}
-                </div>
-
-                {/* Grid Lines */}
-                <div className="absolute inset-0 top-10 pointer-events-none z-0">
-                    {ticks.map((tick, i) => (
-                        <div key={i} className="absolute top-0 bottom-0 border-l border-white/5" style={{ left: tick.offset }}></div>
-                    ))}
-                </div>
-
-                {/* Now Indicator */}
-                {(() => {
-                    const now = new Date();
-                    const diff = differenceInMinutes(now, timelineStart);
-                    if (diff >= 0) {
-                        return (
-                            <div className="absolute top-0 bottom-0 border-l border-rose-500 z-30 pointer-events-none" style={{ left: diff * config.pxPerMin }}>
-                                <div className="absolute top-0 -left-2 bg-rose-500 text-white text-[10px] px-1 rounded-b-sm font-bold">NOW</div>
+                        {event.description && (
+                            <div className="text-slate-300 border-t border-slate-600 pt-2 italic">
+                                {event.description}
                             </div>
-                        )
-                    }
-                    return null;
-                })()}
+                        )}
+                    </div>
+                    <div className="w-2 h-2 bg-slate-800 rotate-45 ml-4 -mt-1"></div>
+                 </div>
+             )}
 
-                {/* Tracks Container */}
-                <div className="pt-6 px-0 relative z-10">
-                    {packedEvents.map(({ event, trackIndex }) => {
-                        const startDiff = differenceInMinutes(event.start, timelineStart);
-                        const duration = differenceInMinutes(event.end, event.start);
-                        const left = startDiff * config.pxPerMin;
-                        const width = Math.max(duration * config.pxPerMin, 10);
-                        const isDone = event.status === 'done';
-                        
-                        return (
-                            <div
-                                key={event.id}
-                                draggable
-                                onDragStart={(e) => handleDragStart(e, event)}
-                                onClick={(e) => { e.stopPropagation(); onEventClick(event); }}
-                                className={cn(
-                                    "absolute h-10 md:h-10 rounded-lg shadow-lg border flex items-center px-2 md:px-3 text-[10px] md:text-xs font-bold transition-all group cursor-pointer md:cursor-grab active:cursor-grabbing hover:z-50 hover:scale-[1.02] hover:shadow-xl hover:brightness-110",
-                                    isDone 
-                                        ? "bg-slate-700 border-slate-600 text-slate-400" 
-                                        : "bg-indigo-600 border-indigo-400 text-white"
-                                )}
-                                style={{
-                                    left: left,
-                                    width: width,
-                                    top: trackIndex * 50 // 40px height + 10px gap
-                                }}
-                            >
-                                <span className="truncate w-full">{event.title}</span>
-                                
-                                {/* Progress Bar (Simulated) */}
-                                <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/30">
-                                    <div className={cn("h-full", isDone ? "bg-emerald-400 w-full" : "bg-white/50 w-1/3")}></div>
-                                </div>
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-        </div>
-     );
-  };
-
-  const renderFishbone = () => {
-    // Group events by tag (or default 'Other')
-    const grouped: Record<string, CalendarEvent[]> = {};
-    const defaultTag = '杂项';
-    
-    events.forEach(ev => {
-        const tag = (ev.tags && ev.tags[0]) ? ev.tags[0] : defaultTag;
-        // Translate common tags for display
-        const displayTag = tag === 'work' ? '工作' : tag === 'life' ? '生活' : tag === 'study' ? '学习' : tag;
-        
-        if (!grouped[displayTag]) grouped[displayTag] = [];
-        grouped[displayTag].push(ev);
-    });
-
-    const categories = Object.keys(grouped);
-    
-    // SVG Config
-    const width = 1000;
-    const height = 600;
-    const spineY = height / 2;
-    const headX = width - 100;
-    const tailX = 50;
-    
-    return (
-        <div className="flex-1 bg-white relative overflow-auto flex items-center justify-center p-4 md:p-8 animate-fade-in custom-scrollbar">
-             {/* Wrapper ensures min width on mobile so SVG doesn't squish */}
-             <div className="relative w-full max-w-5xl aspect-video border-4 border-slate-900 bg-[#fdfbf7] rounded-xl shadow-2xl overflow-hidden p-4 md:p-8 min-w-[800px] overflow-x-auto">
-                <div className="absolute top-4 left-4 text-xs md:text-sm font-bold text-slate-400 tracking-widest uppercase">Logic View • Ishikawa</div>
-                
-                <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full drop-shadow-md">
-                    {/* Spine */}
-                    <line x1={tailX} y1={spineY} x2={headX} y2={spineY} stroke="#334155" strokeWidth="6" strokeLinecap="round" />
-                    
-                    {/* Fish Head (Goal) */}
-                    <g transform={`translate(${headX}, ${spineY})`}>
-                        <path d="M0,-40 C40,-20 60,0 60,0 C60,0 40,20 0,40 Z" fill="#334155" />
-                        <text x="70" y="5" fontSize="16" fontWeight="bold" fill="#334155" alignmentBaseline="middle">项目达成</text>
-                        {/* Eye */}
-                        <circle cx="20" cy="-10" r="4" fill="white" />
-                    </g>
-                    
-                    {/* Fish Tail */}
-                    <g transform={`translate(${tailX}, ${spineY})`}>
-                         <path d="M0,0 L-40,-30 L-40,30 Z" fill="#334155" />
-                    </g>
-
-                    {/* Ribs & Spurs */}
-                    {categories.map((cat, i) => {
-                        const isTop = i % 2 === 0;
-                        const spacing = (headX - tailX - 100) / (categories.length + 1);
-                        const startX = tailX + spacing * (i + 1);
-                        const endY = isTop ? spineY - 180 : spineY + 180;
-                        const endX = startX + 60; // Slanted
-
-                        return (
-                            <g key={cat}>
-                                {/* Rib */}
-                                <line x1={startX} y1={spineY} x2={endX} y2={endY} stroke="#64748b" strokeWidth="4" strokeLinecap="round" />
-                                
-                                {/* Category Label */}
-                                <rect x={endX - 30} y={isTop ? endY - 30 : endY + 10} width="80" height="24" rx="4" fill="#e2e8f0" />
-                                <text x={endX + 10} y={isTop ? endY - 12 : endY + 28} fontSize="14" fontWeight="bold" fill="#475569" textAnchor="middle">{cat}</text>
-
-                                {/* Task Spurs */}
-                                {grouped[cat].map((ev, j) => {
-                                    const spurY = isTop 
-                                        ? spineY - 40 - (j * 35) 
-                                        : spineY + 40 + (j * 35);
-                                    
-                                    // Interpolate X on the slanted rib line
-                                    const progress = (Math.abs(spineY - spurY)) / 180;
-                                    const spurRootX = startX + (60 * progress);
-                                    const spurLen = 120;
-                                    const isDone = ev.status === 'done';
-
-                                    return (
-                                        <g key={ev.id} className="cursor-pointer transition-opacity hover:opacity-80" onClick={() => onEventClick(ev)}>
-                                            {/* Spur Line */}
-                                            <line 
-                                                x1={spurRootX} y1={spurY} 
-                                                x2={spurRootX + spurLen} y2={spurY} 
-                                                stroke={isDone ? "#10b981" : "#94a3b8"} 
-                                                strokeWidth="2" 
-                                                strokeDasharray={isDone ? "" : "4 2"}
-                                            />
-                                            {/* Task Dot */}
-                                            <circle cx={spurRootX} cy={spurY} r="4" fill={isDone ? "#10b981" : "#cbd5e1"} />
-                                            
-                                            {/* Task Label */}
-                                            <text 
-                                                x={spurRootX + 10} 
-                                                y={spurY - 6} 
-                                                fontSize="12" 
-                                                fill={isDone ? "#059669" : "#64748b"}
-                                                textDecoration={isDone ? "line-through" : "none"}
-                                            >
-                                                {ev.title}
-                                            </text>
-                                        </g>
-                                    );
-                                })}
-                            </g>
-                        );
-                    })}
-                </svg>
+             {/* Connection Handles (Visible on Hover or while Linking) */}
+             {/* Target Handle (Left) */}
+             <div 
+                className={cn(
+                    "absolute -left-2 w-4 h-4 rounded-full flex items-center justify-center z-50 cursor-crosshair transition-opacity",
+                    linkSourceId && linkSourceId !== event.id ? "opacity-100 bg-white/50" : "opacity-0 group-hover/bar:opacity-100"
+                )}
+                onMouseUp={(e) => handleLinkEnd(e, event.id)}
+             >
+                 <div className={cn("w-2 h-2 rounded-full", linkSourceId ? "bg-indigo-500 animate-pulse" : "bg-slate-400 hover:bg-indigo-500")}></div>
              </div>
-        </div>
-    );
+
+             {/* Source Handle (Right) */}
+             <div 
+                 className={cn(
+                     "absolute -right-2 w-4 h-4 rounded-full flex items-center justify-center z-50 cursor-crosshair transition-opacity",
+                     "opacity-0 group-hover/bar:opacity-100"
+                 )}
+                 onMouseDown={(e) => handleLinkStart(e, event.id)}
+             >
+                 <div className="w-2 h-2 rounded-full bg-slate-400 hover:bg-indigo-500"></div>
+             </div>
+
+
+             {/* Bar Content */}
+             {event.isMilestone ? (
+                 <div className="flex items-center gap-2">
+                    <div 
+                        onClick={() => onEventClick(event)}
+                        className={cn(
+                            "w-6 h-6 rotate-45 transform border-2 shadow-sm cursor-pointer hover:scale-110 transition-transform flex-shrink-0",
+                            bgClass, borderClass
+                        )}
+                    ></div>
+                    <span className="text-xs font-bold text-slate-700 whitespace-nowrap bg-white/50 px-1 rounded">{event.title}</span>
+                 </div>
+             ) : (
+                 <>
+                     <div 
+                        draggable={!linkSourceId} // Disable drag rescheduling while linking
+                        onDragStart={(e) => handleDragStart(e, event)}
+                        onClick={() => onEventClick(event)}
+                        className={cn(
+                            "h-full rounded-md border shadow-sm relative overflow-hidden transition-all hover:shadow-lg",
+                            !linkSourceId && "cursor-grab active:cursor-grabbing",
+                            bgClass, borderClass
+                        )}
+                        style={{ width: pixelWidth }}
+                     >
+                        <div 
+                            className="absolute top-0 left-0 bottom-0 bg-black/20" 
+                            style={{ width: `${event.progress || 0}%` }}
+                        ></div>
+                        
+                        {!isTextOutside && (
+                            <div className="absolute inset-0 flex items-center px-2">
+                                <span className="text-xs font-bold text-white whitespace-nowrap overflow-hidden text-ellipsis w-full">
+                                    {event.title}
+                                </span>
+                            </div>
+                        )}
+
+                        {event.description && (
+                            <div className="absolute top-0 right-0 p-1">
+                                <Icons.AlignLeft size={10} className="text-white drop-shadow-md" />
+                            </div>
+                        )}
+                     </div>
+                     
+                     {isTextOutside && (
+                         <span className="ml-2 text-xs font-bold text-slate-700 whitespace-nowrap bg-white/50 px-1 rounded cursor-pointer" onClick={() => onEventClick(event)}>
+                             {event.title}
+                         </span>
+                     )}
+                 </>
+             )}
+          </div>
+      );
   };
+
+  // --- Render Dependency Lines ---
+  const renderDependencies = () => {
+      return (
+          <svg className="absolute inset-0 w-full h-full pointer-events-none z-0 opacity-40">
+              {/* Existing Dependencies */}
+              {visibleEvents.map((item, index) => {
+                  if (!item.event.dependencies) return null;
+                  return item.event.dependencies.map(depId => {
+                      const depIdx = visibleEvents.findIndex(x => x.event.id === depId);
+                      if (depIdx === -1) return null;
+
+                      const depItem = visibleEvents[depIdx];
+                      
+                      // Coords
+                      const startX = (differenceInDays(depItem.event.end, timelineStart) * config.pxPerDay);
+                      const startY = (depIdx * 40) + 24;
+                      
+                      const endX = (differenceInDays(item.event.start, timelineStart) * config.pxPerDay);
+                      const endY = (index * 40) + 24;
+
+                      // Bezier Logic
+                      return (
+                          <path 
+                             key={`${depId}-${item.event.id}`}
+                             d={`M ${startX} ${startY} C ${startX + 30} ${startY}, ${endX - 30} ${endY}, ${endX} ${endY}`}
+                             fill="none"
+                             stroke="#64748b"
+                             strokeWidth="1.5"
+                             markerEnd="url(#arrowhead)"
+                          />
+                      );
+                  });
+              })}
+
+              {/* Active Linking Line */}
+              {linkSourceId && mousePos && (() => {
+                  const sourceIdx = visibleEvents.findIndex(x => x.event.id === linkSourceId);
+                  if(sourceIdx === -1) return null;
+                  const sourceItem = visibleEvents[sourceIdx];
+                  
+                  const startX = (differenceInDays(sourceItem.event.end, timelineStart) * config.pxPerDay);
+                  const startY = (sourceIdx * 40) + 24;
+                  
+                  return (
+                      <path 
+                        d={`M ${startX} ${startY} C ${startX + 50} ${startY}, ${mousePos.x - 50} ${mousePos.y}, ${mousePos.x} ${mousePos.y}`}
+                        fill="none"
+                        stroke="#6366f1"
+                        strokeWidth="2"
+                        strokeDasharray="5,5"
+                      />
+                  );
+              })()}
+
+              <defs>
+                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                  <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+                </marker>
+              </defs>
+          </svg>
+      );
+  };
+
+  // --- Mobile Feed View (Unchanged) ---
+  const MobileFeed = () => {
+      return (
+          <div className="flex-1 overflow-y-auto bg-slate-50 p-4">
+              <div className="absolute left-8 top-0 bottom-0 w-0.5 bg-slate-200"></div>
+              {events.sort((a,b) => a.start.getTime() - b.start.getTime()).map(event => (
+                  <div key={event.id} className="relative pl-10 mb-6" onClick={() => onEventClick(event)}>
+                      <div className={cn(
+                          "absolute left-[26px] top-3 w-3 h-3 rounded-full border-2 bg-white",
+                          event.status === 'done' ? "border-emerald-500" : "border-blue-500"
+                      )}></div>
+                      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4 active:scale-95 transition-transform">
+                          <div className="flex justify-between items-start mb-2">
+                              <h4 className="font-bold text-slate-800">{event.title}</h4>
+                              {event.owner && (
+                                  <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center text-[10px] text-slate-600 font-bold border border-slate-200">
+                                      {event.owner[0]}
+                                  </div>
+                              )}
+                          </div>
+                          <div className="flex gap-2 text-xs text-slate-500 mb-3">
+                              <span className="bg-slate-50 px-2 py-0.5 rounded border border-slate-200">{format(event.start, 'MMM d')}</span>
+                              <span>to</span>
+                              <span className="bg-slate-50 px-2 py-0.5 rounded border border-slate-200">{format(event.end, 'MMM d')}</span>
+                          </div>
+                          <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                              <div className="bg-blue-500 h-full" style={{ width: `${event.progress || 0}%` }}></div>
+                          </div>
+                      </div>
+                  </div>
+              ))}
+          </div>
+      );
+  }
+
+  // --- Desktop Split View ---
+  if (isMobile) {
+      return (
+          <div className="fixed inset-0 z-50 bg-slate-50 flex flex-col animate-fade-in">
+             <div className="flex items-center justify-between p-4 bg-white border-b border-slate-200 shadow-sm">
+                <button onClick={onClose}><Icons.ChevronLeft className="text-slate-600" /></button>
+                <h2 className="font-bold text-slate-800">Timeline Feed</h2>
+                <div className="w-6"></div>
+             </div>
+             <MobileFeed />
+          </div>
+      )
+  }
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#121212] flex flex-col text-slate-200 animate-fade-in">
-      {/* Top Toolbar (Responsive) */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between px-4 py-3 bg-[#1e1e24] border-b border-white/5 shadow-md z-20 gap-3 md:gap-0">
-        <div className="flex items-center justify-between w-full md:w-auto gap-6">
-          <button 
-            onClick={onClose}
-            className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"
-          >
-            <Icons.ChevronLeft size={18} /> <span className="hidden md:inline">返回</span>
-          </button>
-          
-          {/* View Toggle */}
-          <div className="flex bg-black/40 p-1 rounded-lg border border-white/5">
-             <button 
-                onClick={() => setViewType('tracks')}
-                className={cn("px-3 md:px-4 py-1.5 rounded-md text-xs md:text-sm font-bold flex items-center gap-2 transition-all", viewType === 'tracks' ? "bg-indigo-600 text-white shadow-lg" : "text-slate-500 hover:text-slate-300")}
-             >
-                <Icons.Tracks size={14} /> 时光轨道
-             </button>
-             <button 
-                onClick={() => setViewType('fishbone')}
-                className={cn("px-3 md:px-4 py-1.5 rounded-md text-xs md:text-sm font-bold flex items-center gap-2 transition-all", viewType === 'fishbone' ? "bg-amber-600 text-white shadow-lg" : "text-slate-500 hover:text-slate-300")}
-             >
-                <Icons.Fish size={14} /> 逻辑骨架
-             </button>
-          </div>
-        </div>
+    <div className="fixed inset-0 z-50 bg-[#F8FAFC] flex flex-col animate-fade-in">
+      {/* 1. Global Header */}
+      <div className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-4 shadow-sm z-20">
+         <div className="flex items-center gap-4">
+             <button onClick={onClose} className="text-slate-500 hover:text-slate-800 p-1 rounded-lg hover:bg-slate-100"><Icons.ChevronLeft /></button>
+             <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-indigo-100 rounded-lg flex items-center justify-center text-indigo-600"><Icons.Briefcase size={18} /></div>
+                <div>
+                    <h2 className="text-sm font-bold text-slate-800">Q4 产品发布</h2>
+                    <p className="text-[10px] text-slate-500">最后更新: 刚刚</p>
+                </div>
+                <Icons.ChevronDown size={14} className="text-slate-400" />
+             </div>
+         </div>
 
-        {viewType === 'tracks' && (
-            <div className="flex gap-2 self-end md:self-auto">
-                {(['day', 'week', 'month'] as ZoomLevel[]).map(level => (
-                    <button
-                    key={level}
-                    onClick={() => setZoomLevel(level)}
-                    className={cn(
-                        "px-3 py-1 text-xs font-medium rounded-full border transition-all",
-                        zoomLevel === level 
-                        ? "bg-white text-black border-white" 
-                        : "text-slate-400 border-white/10 hover:border-white/30"
-                    )}
-                    >
-                    {level === 'day' ? '日' : level === 'week' ? '周' : '月'}
-                    </button>
-                ))}
-            </div>
-        )}
+         <div className="flex items-center gap-3">
+             <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                 {(['day', 'week', 'month'] as ZoomLevel[]).map(z => (
+                     <button 
+                        key={z} 
+                        onClick={() => setZoomLevel(z)}
+                        className={cn("px-3 py-1 text-xs font-medium rounded-md transition-all", zoomLevel === z ? "bg-white shadow-sm text-indigo-600" : "text-slate-500 hover:text-slate-700")}
+                     >
+                        {z === 'day' ? '日' : z === 'week' ? '周' : '月'}
+                     </button>
+                 ))}
+             </div>
+             <div className="h-6 w-px bg-slate-200"></div>
+             <button 
+                onClick={() => setShowResources(!showResources)}
+                className={cn("p-2 rounded-lg transition-colors", showResources ? "bg-indigo-50 text-indigo-600" : "text-slate-500 hover:bg-slate-100")}
+                title="Resource Panel"
+             >
+                 <Icons.Users size={18} />
+             </button>
+         </div>
       </div>
 
-      {/* Content Area */}
-      {viewType === 'tracks' ? renderTimeTracks() : renderFishbone()}
-      
+      {/* 2. Main Split View */}
+      <div className="flex-1 flex overflow-hidden" onMouseUp={cancelLink}>
+         {/* Left Pane: Task Grid */}
+         <div className="w-[320px] bg-white border-r border-slate-200 flex flex-col z-10 shadow-[4px_0_24px_rgba(0,0,0,0.02)]">
+             <div className="h-10 border-b border-slate-100 flex items-center px-4 bg-slate-50/50">
+                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider flex-1">Task Name</span>
+                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider w-16 text-center">Owner</span>
+             </div>
+             <div className="flex-1 overflow-hidden hover:overflow-y-auto custom-scrollbar">
+                 {visibleEvents.map(({ event, depth }, i) => (
+                     <div 
+                        key={event.id}
+                        draggable 
+                        onDragStart={(e) => handleStructureDragStart(e, event)}
+                        onDragOver={(e) => handleStructureDragOver(e, event.id)}
+                        onDragLeave={() => setHoverRowId(null)}
+                        onDrop={(e) => handleStructureDrop(e, event)}
+                        className={cn(
+                            "h-10 flex items-center px-4 border-b border-slate-50 transition-colors group relative cursor-pointer",
+                            hoverRowId === event.id ? "bg-indigo-50 border-b-2 border-indigo-500" : "hover:bg-slate-50"
+                        )}
+                     >
+                         <div className="flex-1 flex items-center min-w-0" style={{ paddingLeft: depth * 16 }}>
+                             {/* Collapse Toggle */}
+                             {(events.some(e => e.parentId === event.id)) ? (
+                                 <button onClick={() => toggleCollapse(event.id)} className="mr-1 text-slate-400 hover:text-slate-600">
+                                     {collapsedParents.has(event.id) ? <Icons.ChevronRight size={12}/> : <Icons.ChevronDown size={12}/>}
+                                 </button>
+                             ) : <span className="w-4 inline-block mr-1"></span>}
+                             
+                             {/* Editable Title */}
+                             {editingId === event.id ? (
+                                 <input 
+                                    autoFocus
+                                    className="w-full text-xs font-bold border border-indigo-300 rounded px-1 outline-none bg-white shadow-sm text-slate-800"
+                                    value={tempTitle}
+                                    onChange={(e) => setTempTitle(e.target.value)}
+                                    onBlur={saveEditing}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') saveEditing();
+                                        if (e.key === 'Escape') setEditingId(null);
+                                    }}
+                                    onFocus={(e) => e.target.select()}
+                                    onClick={(e) => e.stopPropagation()} 
+                                 />
+                             ) : (
+                                <span 
+                                    onDoubleClick={(e) => {
+                                        e.stopPropagation();
+                                        startEditing(event);
+                                    }}
+                                    className={cn("text-xs truncate select-none hover:text-indigo-600 transition-colors cursor-text", event.parentId ? "text-slate-600" : "font-bold text-slate-800")}
+                                    title="Double click to edit"
+                                >
+                                    {event.title}
+                                </span>
+                             )}
+                             
+                             {/* Desc Icon */}
+                             {event.description && <Icons.AlignLeft size={10} className="text-slate-300 ml-2" />}
+                         </div>
+                         <div className="w-16 flex justify-center">
+                             {event.owner ? (
+                                 <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-600 text-[10px] font-bold flex items-center justify-center border border-slate-200">
+                                     {event.owner[0]}
+                                 </div>
+                             ) : <span className="text-slate-300">-</span>}
+                         </div>
+                     </div>
+                 ))}
+                 <div className="h-40 flex items-center justify-center text-xs text-slate-300 italic">
+                     Drag rows to group • Double-click to rename
+                 </div>
+             </div>
+         </div>
+
+         {/* Right Pane: Timeline Canvas */}
+         <div 
+            className="flex-1 bg-slate-50/50 overflow-x-auto overflow-y-auto relative custom-scrollbar select-none"
+            ref={timelineRef}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={handleDrop}
+            onMouseMove={handleLinkMove}
+         >
+             <div style={{ width: totalWidth, height: visibleEvents.length * 40 + 200 }} className="relative">
+                 {/* Header Scale */}
+                 <div className="sticky top-0 h-10 bg-white border-b border-slate-200 z-20 flex items-end shadow-sm">
+                     {timelineDays.map((day, i) => (
+                         <div key={i} className="absolute bottom-0 border-l border-slate-100 pl-2 pb-1 text-[10px] font-medium text-slate-400" style={{ left: i * config.pxPerDay }}>
+                             {format(day, config.tickFormat)}
+                         </div>
+                     ))}
+                 </div>
+                 
+                 {/* Grid Lines */}
+                 <div className="absolute inset-0 top-10 pointer-events-none z-0">
+                     {timelineDays.map((_, i) => (
+                         <div key={i} className="absolute top-0 bottom-0 border-l border-slate-200/50 dashed" style={{ left: i * config.pxPerDay }}></div>
+                     ))}
+                 </div>
+
+                 {/* Now Marker */}
+                 {(() => {
+                     const diff = differenceInDays(new Date(), timelineStart);
+                     if (diff >= 0 && diff < config.daysView) {
+                         return <div className="absolute top-10 bottom-0 border-l-2 border-rose-400 border-dashed z-10" style={{ left: diff * config.pxPerDay }}></div>
+                     }
+                     return null;
+                 })()}
+
+                 {/* Canvas Content */}
+                 <div className="relative pt-2">
+                     {renderDependencies()}
+                     {visibleEvents.map((item, i) => renderBar(item, i))}
+                 </div>
+             </div>
+         </div>
+      </div>
+
+      {/* 3. Resource Panel (Unchanged) */}
+      {showResources && !isMobile && (
+          <div className="h-48 bg-white border-t border-slate-200 flex flex-col shadow-[0_-4px_24px_rgba(0,0,0,0.05)] z-30 animate-fade-in">
+              <div className="px-4 py-2 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Team Workload</span>
+                  <button onClick={() => setShowResources(false)}><Icons.X size={14} className="text-slate-400 hover:text-slate-600"/></button>
+              </div>
+              <div className="flex-1 p-4 overflow-x-auto flex gap-4">
+                  {['Alex', 'Sarah', 'Mike'].map(name => (
+                      <div key={name} className="min-w-[200px] border border-slate-100 rounded-xl p-3 bg-white shadow-sm flex flex-col gap-2">
+                          <div className="flex items-center gap-2">
+                              <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-xs font-bold text-slate-600">{name[0]}</div>
+                              <span className="text-sm font-bold text-slate-700">{name}</span>
+                          </div>
+                          <div className="space-y-1">
+                              <div className="flex justify-between text-[10px] text-slate-400"><span>Today</span><span>6h / 8h</span></div>
+                              <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                  <div className="h-full bg-emerald-400 w-3/4"></div>
+                              </div>
+                          </div>
+                      </div>
+                  ))}
+              </div>
+          </div>
+      )}
+
     </div>
   );
 };

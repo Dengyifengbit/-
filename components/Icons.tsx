@@ -5,6 +5,8 @@ import {
   CheckCircle,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Layout,
   List,
@@ -15,6 +17,7 @@ import {
   Inbox,
   Briefcase,
   User,
+  Users,
   Menu,
   X,
   MapPin,
@@ -29,7 +32,15 @@ import {
   Zap,
   GanttChartSquare,
   Fish,
-  StretchHorizontal
+  StretchHorizontal,
+  GitCommit,
+  Link as LinkIcon,
+  AlertCircle,
+  Flag,
+  MessageSquare,
+  Paperclip,
+  FileText,
+  Lock
 } from "lucide-react";
 
 export const Icons = {
@@ -37,6 +48,8 @@ export const Icons = {
   CheckCircle,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Layout,
   List,
@@ -47,6 +60,7 @@ export const Icons = {
   Inbox,
   Briefcase,
   User,
+  Users,
   Menu,
   X,
   MapPin,
@@ -61,5 +75,13 @@ export const Icons = {
   Zap,
   ChartGantt: GanttChartSquare,
   Fish,
-  Tracks: StretchHorizontal
+  Tracks: StretchHorizontal,
+  Milestone: GitCommit,
+  Link: LinkIcon,
+  Alert: AlertCircle,
+  Flag,
+  MessageSquare,
+  Paperclip,
+  FileText,
+  Lock
 };
